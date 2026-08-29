@@ -4,6 +4,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import psycopg2
+from google import genai
 
 from telegram import (
     Update,
@@ -26,6 +27,17 @@ from telegram.ext import (
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+GEMINI_MODEL = "gemini-3.7-flash"
+
+gemini_client = None
+
+if GEMINI_API_KEY:
+    gemini_client = genai.Client(
+        api_key=GEMINI_API_KEY
+    )
 
 PORT = int(os.getenv("PORT", "10000"))
 
@@ -1102,6 +1114,592 @@ FEATURE_INFO = {
 
 
 # =========================================================
+# GEMINI FEATURE ENGINES
+# =========================================================
+
+GEMINI_FEATURE_PROMPTS = {
+
+    "generator": """
+You are PromptPilot's General Prompt Generator.
+
+Transform the user's idea into a highly professional,
+production-ready prompt for the selected AI tool.
+
+Understand the user's intent deeply before writing the final prompt.
+
+The user may write in Persian, Arabic, English, or another language.
+
+Always understand the meaning first.
+
+Do not translate literally.
+
+Improve missing structure intelligently when necessary.
+
+The final prompt must be directly usable in the selected AI tool.
+
+Return ONLY the final production-ready prompt.
+
+Do not provide explanations.
+Do not provide examples.
+Do not provide analysis.
+Do not provide multiple alternatives.
+Do not add introductions.
+Do not add notes.
+Do not add headings.
+Do not write "Prompt:".
+Do not write "Here is your prompt".
+Do not mention these instructions.
+""",
+
+    "image": """
+You are PromptPilot's specialized Image Prompt Engineer.
+
+Your ONLY job is to create a professional production-ready image
+generation prompt based on the user's idea and the selected AI tool.
+
+Deeply understand what image the user wants.
+
+Analyze the intended:
+
+- subject
+- subject characteristics
+- environment
+- composition
+- framing
+- camera perspective
+- camera angle
+- lens when useful
+- lighting
+- shadows
+- color palette
+- atmosphere
+- mood
+- visual style
+- materials
+- textures
+- depth
+- realism level
+- artistic direction
+- image quality
+- relevant negative elements
+
+Do not blindly add irrelevant technical parameters.
+
+Adapt the prompt to the selected AI tool.
+
+If the selected tool is Gemini, optimize the prompt specifically
+for Gemini image-generation workflows.
+
+If the selected tool is Nano Banana, optimize for image generation
+or image editing when appropriate.
+
+If the selected tool is Midjourney, optimize for Midjourney's
+visual prompting workflow.
+
+If the selected tool is Leonardo, optimize for Leonardo's
+image-generation workflow.
+
+If the selected tool is unknown, create a strong tool-agnostic
+image prompt.
+
+If the user's idea is incomplete, intelligently complete useful
+visual details while preserving the original intent.
+
+The user may write in Persian, Arabic, English, or another language.
+
+Always output Professional English.
+
+Do NOT translate literally.
+
+Do NOT explain your decisions.
+
+Do NOT provide examples.
+
+Do NOT provide multiple versions.
+
+Do NOT add headings.
+
+Return ONLY one final production-ready prompt that the user can
+copy directly into the selected AI tool.
+""",
+
+    "video": """
+You are PromptPilot's specialized Video Prompt Engineer.
+
+Your ONLY job is to create a professional production-ready video
+generation prompt for the selected AI video tool.
+
+Understand the user's intended video deeply.
+
+Build the prompt around:
+
+- subject
+- environment
+- action
+- subject movement
+- facial or body movement when relevant
+- object movement
+- environmental movement
+- camera movement
+- camera position
+- framing
+- shot type
+- lens or perspective when useful
+- lighting
+- atmosphere
+- cinematic language
+- visual style
+- timing
+- pacing
+- continuity
+- physical realism
+- important constraints
+
+Do not add irrelevant details.
+
+Adapt the prompt to the selected AI video tool.
+
+If the selected tool is Veo, optimize specifically for Google's
+Veo video-generation workflow.
+
+If the selected tool is Sora, optimize for Sora's video prompting
+workflow.
+
+If the selected tool is Runway, optimize for Runway's video
+generation workflow.
+
+If the selected tool is Kling, optimize for Kling's video
+generation workflow.
+
+If the selected tool is unknown, create a strong tool-agnostic
+video prompt.
+
+The user may write in Persian, Arabic, English, or another language.
+
+Always output Professional English.
+
+Do NOT provide explanations.
+Do NOT provide examples.
+Do NOT provide analysis.
+Do NOT provide alternatives.
+Do NOT add headings.
+Do NOT add notes.
+
+Return ONLY one final production-ready prompt.
+""",
+
+    "improver": """
+You are PromptPilot's Professional Prompt Improver.
+
+The user provides an existing prompt.
+
+Transform it into a substantially stronger, clearer, more precise,
+professional and production-ready prompt while preserving the
+original intent.
+
+Improve:
+
+- clarity
+- specificity
+- structure
+- context
+- constraints
+- desired output
+- relevant technical details
+- consistency
+- ambiguity
+
+Do not unnecessarily change the user's intended task.
+
+Adapt the improved prompt to the selected AI tool.
+
+The final output MUST be Professional English.
+
+Do NOT explain what you changed.
+
+Do NOT provide before/after versions.
+
+Do NOT provide analysis.
+
+Do NOT add headings.
+
+Do NOT provide examples.
+
+Return ONLY the final improved prompt.
+""",
+
+    "doctor": """
+You are PromptPilot's Prompt Doctor.
+
+The user provides a prompt that may contain weaknesses.
+
+Internally diagnose:
+
+- ambiguity
+- missing context
+- weak instructions
+- missing constraints
+- poor structure
+- unclear output requirements
+- unnecessary wording
+- contradictions
+- tool incompatibility
+
+Then silently repair all relevant problems.
+
+Preserve the original intention.
+
+Adapt the repaired prompt to the selected AI tool.
+
+The final result MUST be Professional English and immediately usable.
+
+Do NOT show the diagnosis.
+
+Do NOT show scores.
+
+Do NOT explain the problems.
+
+Do NOT show the original prompt.
+
+Do NOT provide before/after versions.
+
+Do NOT add headings.
+
+Return ONLY the final repaired production-ready prompt.
+""",
+
+    "detector": """
+You are PromptPilot's AI Task and Tool Recommender.
+
+Understand exactly what the user wants to accomplish.
+
+Internally determine:
+
+- task type
+- appropriate AI workflow
+- suitable tool category
+- most effective prompting approach
+
+If a tool has already been selected, optimize specifically for it.
+
+If the user selected "I don't know", intelligently determine the
+most appropriate workflow based on the task.
+
+The purpose is not to give the user a long explanation.
+
+Create a professional, immediately usable prompt for the identified
+workflow.
+
+The final result MUST be Professional English.
+
+Do NOT provide a tutorial.
+Do NOT provide examples.
+Do NOT provide analysis.
+Do NOT provide long explanations.
+Do NOT add headings.
+
+Return ONLY the final production-ready prompt.
+""",
+
+    "pro": """
+You are PromptPilot's Professional Idea-to-Prompt Engine.
+
+The user gives you a raw idea in Persian, Arabic, English, or another
+language.
+
+Your job is NOT simple translation.
+
+Understand the idea deeply and transform it into a sophisticated,
+production-ready prompt.
+
+Infer useful missing details when appropriate without changing the
+user's original intention.
+
+Structure the prompt according to the selected AI tool.
+
+The final prompt MUST always be Professional English.
+
+The final result must be immediately usable.
+
+Do NOT explain the translation.
+
+Do NOT explain your reasoning.
+
+Do NOT provide examples.
+
+Do NOT provide alternatives.
+
+Do NOT add headings.
+
+Do NOT add notes.
+
+Return ONLY the final production-ready prompt.
+""",
+
+    "remix": """
+You are PromptPilot's Professional Prompt Remix Engine.
+
+The user provides an existing prompt.
+
+Create a refined and more distinctive version that preserves the
+core intention while making the prompt more polished and effective.
+
+Respect the selected AI tool.
+
+Do not completely replace the original concept.
+
+Improve creative direction, specificity, quality and practical
+usability where appropriate.
+
+The final output MUST be Professional English.
+
+Do NOT explain the changes.
+
+Do NOT provide multiple versions.
+
+Do NOT add headings.
+
+Do NOT add commentary.
+
+Return ONLY the final production-ready prompt.
+""",
+
+}
+
+
+# =========================================================
+# GEMINI TOOL PROFILES
+# =========================================================
+
+GEMINI_TOOL_PROFILES = {
+
+    "chatgpt": """
+Optimize the final prompt for ChatGPT's instruction-following,
+reasoning, context handling and structured-output capabilities.
+""",
+
+    "gemini": """
+Optimize the final prompt specifically for Google's Gemini ecosystem.
+Use clear natural-language instructions and structured requirements
+when useful.
+""",
+
+    "nanobanana": """
+Optimize the final prompt specifically for Nano Banana image
+generation and image-editing workflows.
+
+Prioritize precise visual descriptions, composition, subject
+consistency, identity preservation and editing intent when relevant.
+""",
+
+    "midjourney": """
+Optimize the final prompt for Midjourney image generation.
+
+Prioritize rich visual direction, composition, lighting, subject
+details, atmosphere, style and visual coherence.
+
+Do not add unsupported or unnecessary syntax.
+""",
+
+    "leonardo": """
+Optimize the final prompt for Leonardo image generation.
+
+Prioritize detailed visual direction, subject consistency,
+composition, lighting, style and generation-relevant details.
+""",
+
+    "veo": """
+Optimize the final prompt specifically for Google's Veo video
+generation workflow.
+
+Focus strongly on scene description, subject action, camera movement,
+temporal progression, cinematic direction and physical continuity.
+""",
+
+    "sora": """
+Optimize the final prompt for Sora video generation.
+
+Prioritize cinematic scene construction, subject action, camera
+movement, timing, environment and visual continuity.
+""",
+
+    "runway": """
+Optimize the final prompt for Runway video generation.
+
+Prioritize visual motion, camera movement, subject behavior,
+environmental motion, composition and cinematic direction.
+""",
+
+    "kling": """
+Optimize the final prompt for Kling video generation.
+
+Prioritize subject movement, camera motion, scene continuity,
+visual realism and cinematic details.
+""",
+
+    "suno": """
+Optimize the final prompt for Suno music generation.
+
+Translate the user's intent into clear professional musical direction
+including genre, mood, instrumentation, vocals when relevant,
+arrangement, energy, tempo, structure and production character.
+""",
+
+    "ud io": """
+Optimize the final prompt for Udio music generation.
+
+Provide clear professional musical direction including genre, mood,
+instrumentation, vocals when relevant, arrangement, energy, tempo,
+structure and production character.
+""",
+
+    "other": """
+Create a tool-agnostic professional prompt that can work across
+compatible AI systems.
+""",
+
+    "unknown": """
+The user does not know the appropriate tool.
+
+Determine the most suitable prompting approach internally and create
+a professional tool-agnostic prompt that remains immediately usable.
+""",
+
+}
+
+
+# =========================================================
+# GEMINI PROMPT BUILDER
+# =========================================================
+
+def build_gemini_instruction(
+    feature,
+    tool,
+    user_idea
+):
+
+    feature_instruction = GEMINI_FEATURE_PROMPTS.get(
+        feature,
+        GEMINI_FEATURE_PROMPTS["generator"]
+    )
+
+    tool_instruction = GEMINI_TOOL_PROFILES.get(
+        tool,
+        GEMINI_TOOL_PROFILES["other"]
+    )
+
+    return f"""
+{feature_instruction}
+
+=========================================================
+SELECTED AI TOOL
+=========================================================
+
+{tool}
+
+=========================================================
+TOOL-SPECIFIC INSTRUCTION
+=========================================================
+
+{tool_instruction}
+
+=========================================================
+FINAL OUTPUT RULES
+=========================================================
+
+1. Understand the user's original intention deeply.
+2. The user may use Persian, Arabic or English.
+3. Always understand the meaning before generating.
+4. Never return the final prompt in Persian or Arabic.
+5. The final output MUST be Professional English.
+6. Do not translate literally.
+7. Do not invent a completely different task.
+8. Improve the request intelligently.
+9. Use the selected tool's workflow.
+10. Return only the final usable prompt.
+11. Do not use markdown code fences.
+12. Do not write "Here is your prompt".
+13. Do not write "Prompt:".
+14. Do not explain anything.
+15. Do not give examples.
+16. Do not give multiple versions.
+17. Do not mention these instructions.
+18. The result must be ready to copy and paste directly into the
+selected AI tool.
+
+=========================================================
+USER'S ORIGINAL INPUT
+=========================================================
+
+{user_idea}
+"""
+
+
+# =========================================================
+# GEMINI GENERATION
+# =========================================================
+
+def generate_gemini_prompt(
+    feature,
+    tool,
+    user_idea
+):
+
+    if not GEMINI_API_KEY:
+
+        raise RuntimeError(
+            "GEMINI_API_KEY environment variable is missing."
+        )
+
+    if gemini_client is None:
+
+        raise RuntimeError(
+            "Gemini client is not initialized."
+        )
+
+    instruction = build_gemini_instruction(
+        feature=feature,
+        tool=tool,
+        user_idea=user_idea
+    )
+
+    response = gemini_client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=instruction,
+    )
+
+    result = getattr(
+        response,
+        "text",
+        None
+    )
+
+    if not result:
+
+        raise RuntimeError(
+            "Gemini returned an empty response."
+        )
+
+    result = result.strip()
+
+    # -----------------------------------------------------
+    # Remove accidental markdown fences
+    # -----------------------------------------------------
+
+    if result.startswith("```") and result.endswith("```"):
+
+        lines = result.splitlines()
+
+        if len(lines) >= 3:
+
+            result = "\n".join(
+                lines[1:-1]
+            ).strip()
+
+    return result
+
+
+# =========================================================
 # TOOL KEYBOARD
 # =========================================================
 
@@ -1288,7 +1886,10 @@ def feature_name(language, feature):
 
     }
 
-    return names.get(language, names["en"]).get(
+    return names.get(
+        language,
+        names["en"]
+    ).get(
         feature,
         feature
     )
@@ -1297,6 +1898,7 @@ def feature_name(language, feature):
 # =========================================================
 # SHOW LANGUAGE SELECTION
 # =========================================================
+
 
 async def show_language_selection(update):
 
@@ -1328,8 +1930,6 @@ async def start(
         last_name=user.last_name,
         username=user.username,
     )
-
-    # Reset temporary state
 
     context.user_data.clear()
 
@@ -1426,8 +2026,16 @@ async def feature_callback(
 
     context.user_data["current_feature"] = feature
     context.user_data["waiting_for_idea"] = True
-    context.user_data.pop("user_idea", None)
-    context.user_data.pop("selected_tool", None)
+
+    context.user_data.pop(
+        "user_idea",
+        None
+    )
+
+    context.user_data.pop(
+        "selected_tool",
+        None
+    )
 
     text = FEATURE_INFO[feature].get(
         language,
@@ -1458,7 +2066,9 @@ async def text_message_handler(
     if not user:
         return
 
-    language = get_user_language(user.id)
+    language = get_user_language(
+        user.id
+    )
 
     text = update.message.text.strip()
 
@@ -1481,6 +2091,7 @@ async def text_message_handler(
     if current_feature and waiting_for_idea:
 
         context.user_data["user_idea"] = text
+
         context.user_data["waiting_for_idea"] = False
 
         await update.message.reply_text(
@@ -1521,8 +2132,10 @@ async def tool_callback(
 
     await query.answer()
 
+    user_id = query.from_user.id
+
     language = get_user_language(
-        query.from_user.id
+        user_id
     )
 
     tool = query.data.replace(
@@ -1530,6 +2143,52 @@ async def tool_callback(
         "",
         1
     )
+
+    feature = context.user_data.get(
+        "current_feature"
+    )
+
+    user_idea = context.user_data.get(
+        "user_idea"
+    )
+
+    if not feature:
+
+        await query.edit_message_text(
+            get_main_menu_text(language),
+            parse_mode="HTML",
+            reply_markup=main_menu_keyboard(language)
+        )
+
+        return
+
+    if not user_idea:
+
+        text = {
+
+            "fa": (
+                "❌ ابتدا ایده یا Prompt خود را ارسال کنید."
+            ),
+
+            "en": (
+                "❌ Please send your idea or prompt first."
+            ),
+
+            "ar": (
+                "❌ أرسل فكرتك أو الـ Prompt أولاً."
+            ),
+
+        }
+
+        await query.edit_message_text(
+            text.get(
+                language,
+                text["en"]
+            ),
+            reply_markup=back_main_keyboard(language)
+        )
+
+        return
 
     context.user_data["selected_tool"] = tool
 
@@ -1556,108 +2215,216 @@ async def tool_callback(
         tool
     )
 
-    if language == "fa":
+    # -----------------------------------------------------
+    # Gemini API check
+    # -----------------------------------------------------
 
-        if tool == "unknown":
+    if not GEMINI_API_KEY:
 
-            text = (
-                "🤖 <b>انتخاب شد: نمی‌دانم</b>\n\n"
-                "اشکالی ندارد.\n"
-                "در مرحله هوش مصنوعی، سیستم ایده تو را "
-                "بررسی می‌کند و ابزارهای مناسب را پیشنهاد می‌دهد.\n\n"
-                "⏳ فعلاً این مرحله آماده دریافت ایده و انتخاب ابزار است.\n\n"
-                "🏠 برای برگشت به منوی اصلی از دکمه زیر استفاده کن."
-            )
+        text = {
 
-        elif tool == "other":
+            "fa": (
+                "❌ <b>Gemini API Key پیدا نشد.</b>\n\n"
+                "لطفاً متغیر محیطی GEMINI_API_KEY را در Render "
+                "تنظیم کنید."
+            ),
 
-            text = (
-                "❓ <b>سایر ابزارها</b>\n\n"
-                "در این حالت Prompt به شکل عمومی و قابل "
-                "استفاده تولید خواهد شد تا وابستگی به یک "
-                "ابزار خاص نداشته باشد.\n\n"
-                "⏳ موتور هوش مصنوعی در مرحله بعد این قسمت را تکمیل می‌کند."
-            )
+            "en": (
+                "❌ <b>Gemini API Key was not found.</b>\n\n"
+                "Please configure the GEMINI_API_KEY environment "
+                "variable in Render."
+            ),
 
-        else:
+            "ar": (
+                "❌ <b>لم يتم العثور على Gemini API Key.</b>\n\n"
+                "يرجى إعداد متغير GEMINI_API_KEY في Render."
+            ),
 
-            text = (
-                f"✅ <b>ابزار انتخاب شد:</b> {selected_name}\n\n"
-                "ایده تو ثبت شد.\n\n"
-                "در مرحله بعد موتور هوش مصنوعی بررسی می‌کند "
-                "که برای این ابزار چه ساختار و سبک Prompt "
-                "مناسب‌تر است.\n\n"
-                "⏳ تولید واقعی Prompt در مرحله اتصال Gemini فعال می‌شود."
-            )
+        }
 
-    elif language == "ar":
+        await query.edit_message_text(
+            text.get(
+                language,
+                text["en"]
+            ),
+            parse_mode="HTML",
+            reply_markup=back_main_keyboard(language)
+        )
 
-        if tool == "unknown":
+        return
 
-            text = (
-                "🤖 <b>تم اختيار: لا أعرف</b>\n\n"
-                "لا مشكلة.\n"
-                "في مرحلة الذكاء الاصطناعي سيتم تحليل فكرتك "
-                "واقتراح الأدوات المناسبة.\n\n"
-                "⏳ هذه المرحلة حالياً تجهز المسار للمرحلة التالية."
-            )
+    # -----------------------------------------------------
+    # Processing message
+    # -----------------------------------------------------
 
-        elif tool == "other":
+    processing_text = {
 
-            text = (
-                "❓ <b>أداة أخرى</b>\n\n"
-                "سيتم إنشاء Prompt عام يمكن استخدامه مع "
-                "أدوات مختلفة دون ربطه بأداة واحدة.\n\n"
-                "⏳ سيتم تفعيل الإنشاء الفعلي في المرحلة التالية."
-            )
+        "fa": (
+            "🧠 <b>Gemini در حال ساخت Prompt حرفه‌ای است...</b>\n\n"
+            f"🎯 ابزار: {selected_name}\n\n"
+            "در حال تحلیل درخواست و ساخت خروجی اختصاصی..."
+        ),
 
-        else:
+        "en": (
+            "🧠 <b>Gemini is creating your professional prompt...</b>\n\n"
+            f"🎯 Tool: {selected_name}\n\n"
+            "Analyzing your request and building a specialized output..."
+        ),
 
-            text = (
-                f"✅ <b>الأداة المختارة:</b> {selected_name}\n\n"
-                "تم حفظ فكرتك.\n\n"
-                "في المرحلة التالية سيقوم محرك الذكاء الاصطناعي "
-                "بتحديد أفضل أسلوب وبنية Prompt لهذه الأداة.\n\n"
-                "⏳ إنشاء Prompt الفعلي سيتم تفعيله عند ربط Gemini."
-            )
+        "ar": (
+            "🧠 <b>Gemini يقوم بإنشاء Prompt احترافي...</b>\n\n"
+            f"🎯 الأداة: {selected_name}\n\n"
+            "جاري تحليل طلبك وإنشاء نتيجة مخصصة..."
+        ),
+
+    }
+
+    await query.edit_message_text(
+        processing_text.get(
+            language,
+            processing_text["en"]
+        ),
+        parse_mode="HTML"
+    )
+
+    # -----------------------------------------------------
+    # Generate prompt with Gemini
+    # -----------------------------------------------------
+
+    try:
+
+        final_prompt = generate_gemini_prompt(
+            feature=feature,
+            tool=tool,
+            user_idea=user_idea
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Gemini generation failed for user %s",
+            user_id
+        )
+
+        error_text = {
+
+            "fa": (
+                "❌ <b>خطا در اتصال به Gemini</b>\n\n"
+                "در تولید Prompt مشکلی به وجود آمد.\n"
+                "لطفاً دوباره تلاش کنید."
+            ),
+
+            "en": (
+                "❌ <b>Gemini generation error</b>\n\n"
+                "Something went wrong while generating your prompt.\n"
+                "Please try again."
+            ),
+
+            "ar": (
+                "❌ <b>خطأ في إنشاء Prompt بواسطة Gemini</b>\n\n"
+                "حدثت مشكلة أثناء إنشاء الـ Prompt.\n"
+                "يرجى المحاولة مرة أخرى."
+            ),
+
+        }
+
+        await query.edit_message_text(
+            error_text.get(
+                language,
+                error_text["en"]
+            ),
+            parse_mode="HTML",
+            reply_markup=back_main_keyboard(language)
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # Final result
+    # -----------------------------------------------------
+
+    result_header = {
+
+        "fa": (
+            "✅ <b>Prompt آماده است</b>\n\n"
+            f"🎯 <b>ابزار:</b> {selected_name}\n"
+            f"🧩 <b>قابلیت:</b> {feature_name(language, feature)}\n\n"
+        ),
+
+        "en": (
+            "✅ <b>Your prompt is ready</b>\n\n"
+            f"🎯 <b>Tool:</b> {selected_name}\n"
+            f"🧩 <b>Feature:</b> {feature_name(language, feature)}\n\n"
+        ),
+
+        "ar": (
+            "✅ <b>الـ Prompt جاهز</b>\n\n"
+            f"🎯 <b>الأداة:</b> {selected_name}\n"
+            f"🧩 <b>الميزة:</b> {feature_name(language, feature)}\n\n"
+        ),
+
+    }
+
+    # -----------------------------------------------------
+    # Escape HTML safely
+    # -----------------------------------------------------
+
+    safe_prompt = (
+        final_prompt
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+    final_text = (
+        result_header.get(
+            language,
+            result_header["en"]
+        )
+        + "<code>"
+        + safe_prompt
+        + "</code>"
+    )
+
+    # -----------------------------------------------------
+    # Telegram message size protection
+    # -----------------------------------------------------
+
+    if len(final_text) <= 4000:
+
+        await query.edit_message_text(
+            final_text,
+            parse_mode="HTML",
+            reply_markup=back_main_keyboard(language)
+        )
 
     else:
 
-        if tool == "unknown":
+        await query.edit_message_text(
+            result_header.get(
+                language,
+                result_header["en"]
+            ),
+            parse_mode="HTML",
+            reply_markup=back_main_keyboard(language)
+        )
 
-            text = (
-                "🤖 <b>Selected: I don't know</b>\n\n"
-                "No problem.\n"
-                "The AI engine will analyze your idea and "
-                "recommend suitable tools in the next stage.\n\n"
-                "⏳ The AI generation engine will be connected next."
-            )
+        await query.message.reply_text(
+            final_prompt
+        )
 
-        elif tool == "other":
+    # -----------------------------------------------------
+    # Clear temporary state
+    # -----------------------------------------------------
 
-            text = (
-                "❓ <b>Other Tool</b>\n\n"
-                "A general-purpose prompt will be created "
-                "without depending on a specific tool.\n\n"
-                "⏳ Actual generation will be enabled in the next stage."
-            )
+    context.user_data.pop(
+        "waiting_for_idea",
+        None
+    )
 
-        else:
-
-            text = (
-                f"✅ <b>Selected tool:</b> {selected_name}\n\n"
-                "Your idea has been saved.\n\n"
-                "In the next stage, the AI engine will determine "
-                "the most suitable prompt structure and style "
-                "for this tool.\n\n"
-                "⏳ Actual prompt generation will be enabled "
-                "after Gemini is connected."
-            )
-
-    await query.edit_message_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=back_main_keyboard(language)
+    context.user_data.pop(
+        "user_idea",
+        None
     )
 
 
@@ -1725,8 +2492,16 @@ async def back_feature_callback(
         return
 
     context.user_data["waiting_for_idea"] = True
-    context.user_data.pop("user_idea", None)
-    context.user_data.pop("selected_tool", None)
+
+    context.user_data.pop(
+        "user_idea",
+        None
+    )
+
+    context.user_data.pop(
+        "selected_tool",
+        None
+    )
 
     text = FEATURE_INFO[feature].get(
         language,
@@ -1775,6 +2550,12 @@ def main():
 
         raise RuntimeError(
             "DATABASE_URL environment variable is missing."
+        )
+
+    if not GEMINI_API_KEY:
+
+        logger.warning(
+            "GEMINI_API_KEY environment variable is missing."
         )
 
     # -----------------------------------------------------
