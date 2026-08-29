@@ -5,10 +5,15 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import psycopg2
 
-from telegram import Update
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
+    CallbackQueryHandler,
     ContextTypes,
 )
 
@@ -36,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 # =========================================================
-# HEALTH CHECK SERVER
+# HEALTH SERVER
 # =========================================================
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -76,12 +81,13 @@ def start_health_server():
 
 
 # =========================================================
-# DATABASE CONNECTION
+# DATABASE
 # =========================================================
 
 def get_db_connection():
 
     if not DATABASE_URL:
+
         raise RuntimeError(
             "DATABASE_URL environment variable is missing."
         )
@@ -91,10 +97,6 @@ def get_db_connection():
         connect_timeout=10
     )
 
-
-# =========================================================
-# DATABASE INITIALIZATION
-# =========================================================
 
 def initialize_database():
 
@@ -107,10 +109,6 @@ def initialize_database():
 
         connection = get_db_connection()
         cursor = connection.cursor()
-
-        # -------------------------------------------------
-        # USERS TABLE
-        # -------------------------------------------------
 
         cursor.execute(
             """
@@ -167,7 +165,7 @@ def initialize_database():
 
 
 # =========================================================
-# USER DATABASE FUNCTIONS
+# SAVE / UPDATE USER
 # =========================================================
 
 def save_user(
@@ -246,6 +244,251 @@ def save_user(
 
 
 # =========================================================
+# GET USER LANGUAGE
+# =========================================================
+
+def get_user_language(telegram_id):
+
+    connection = None
+    cursor = None
+
+    try:
+
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            SELECT language
+            FROM users
+            WHERE telegram_id = %s
+            """,
+            (telegram_id,)
+        )
+
+        result = cursor.fetchone()
+
+        if result and result[0]:
+
+            return result[0]
+
+        return "en"
+
+    except Exception:
+
+        logger.exception(
+            "Failed to get user language."
+        )
+
+        return "en"
+
+    finally:
+
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
+
+
+# =========================================================
+# UPDATE USER LANGUAGE
+# =========================================================
+
+def update_user_language(
+    telegram_id,
+    language
+):
+
+    connection = None
+    cursor = None
+
+    try:
+
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        cursor.execute(
+            """
+            UPDATE users
+
+            SET
+                language = %s,
+                last_active = NOW()
+
+            WHERE telegram_id = %s
+            """,
+            (
+                language,
+                telegram_id,
+            )
+        )
+
+        connection.commit()
+
+        logger.info(
+            "User %s language changed to %s.",
+            telegram_id,
+            language
+        )
+
+        return True
+
+    except Exception:
+
+        if connection:
+            connection.rollback()
+
+        logger.exception(
+            "Failed to update language."
+        )
+
+        return False
+
+    finally:
+
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
+
+
+# =========================================================
+# LANGUAGE SELECTION KEYBOARD
+# =========================================================
+
+def language_keyboard():
+
+    keyboard = [
+
+        [
+            InlineKeyboardButton(
+                "🇦🇫 فارسی",
+                callback_data="lang_fa"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🇬🇧 English",
+                callback_data="lang_en"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🇸🇦 العربية",
+                callback_data="lang_ar"
+            )
+        ],
+
+    ]
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+# =========================================================
+# LANGUAGE SELECTION TEXT
+# =========================================================
+
+LANGUAGE_SELECTION_TEXT = {
+
+    "fa":
+        "🤖 PromptPilot\n\n"
+        "زبان خود را انتخاب کنید:",
+
+    "en":
+        "🤖 PromptPilot\n\n"
+        "Choose your language:",
+
+    "ar":
+        "🤖 PromptPilot\n\n"
+        "اختر لغتك:",
+
+}
+
+
+# =========================================================
+# MAIN MENU PLACEHOLDER
+# =========================================================
+
+def get_main_menu_text(language):
+
+    if language == "fa":
+
+        return (
+            "🤖 PromptPilot\n\n"
+            "👋 خوش آمدید!\n\n"
+            "PromptPilot به شما کمک می‌کند "
+            "ایده‌های ساده خود را به Promptهای "
+            "حرفه‌ای برای ابزارهای AI تبدیل کنید.\n\n"
+            "👇 یک قابلیت را انتخاب کنید:"
+        )
+
+    if language == "ar":
+
+        return (
+            "🤖 PromptPilot\n\n"
+            "👋 مرحباً بك!\n\n"
+            "يساعدك PromptPilot على تحويل أفكارك "
+            "البسيطة إلى Prompts احترافية لأدوات الذكاء الاصطناعي.\n\n"
+            "👇 اختر إحدى الميزات:"
+        )
+
+    return (
+        "🤖 PromptPilot\n\n"
+        "👋 Welcome!\n\n"
+        "PromptPilot helps you turn simple ideas "
+        "into professional prompts for AI tools.\n\n"
+        "👇 Choose a feature:"
+    )
+
+
+# =========================================================
+# TEMPORARY MAIN MENU
+# =========================================================
+
+def main_menu_keyboard():
+
+    keyboard = [
+
+        [
+            InlineKeyboardButton(
+                "🧠 Prompt Generator",
+                callback_data="feature_generator"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🔥 Prompt Improver",
+                callback_data="feature_improver"
+            )
+        ],
+
+    ]
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+# =========================================================
+# SHOW LANGUAGE SELECTION
+# =========================================================
+
+async def show_language_selection(
+    update: Update
+):
+
+    if update.message:
+
+        await update.message.reply_text(
+            LANGUAGE_SELECTION_TEXT["en"],
+            reply_markup=language_keyboard()
+        )
+
+
+# =========================================================
 # START COMMAND
 # =========================================================
 
@@ -260,7 +503,7 @@ async def start(
         return
 
     # -----------------------------------------------------
-    # Save user in database
+    # Save user
     # -----------------------------------------------------
 
     save_user(
@@ -271,13 +514,160 @@ async def start(
     )
 
     # -----------------------------------------------------
-    # Temporary welcome message
+    # Always show language selection on /start
     # -----------------------------------------------------
 
-    await update.message.reply_text(
-        "🤖 PromptPilot\n\n"
-        "Welcome!\n\n"
-        "Your account has been registered successfully."
+    await show_language_selection(update)
+
+
+# =========================================================
+# LANGUAGE CALLBACK
+# =========================================================
+
+async def language_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    query = update.callback_query
+
+    if not query:
+        return
+
+    await query.answer()
+
+    user = query.from_user
+
+    data = query.data
+
+    # -----------------------------------------------------
+    # Determine language
+    # -----------------------------------------------------
+
+    if data == "lang_fa":
+
+        language = "fa"
+
+    elif data == "lang_en":
+
+        language = "en"
+
+    elif data == "lang_ar":
+
+        language = "ar"
+
+    else:
+
+        return
+
+    # -----------------------------------------------------
+    # Save language
+    # -----------------------------------------------------
+
+    success = update_user_language(
+        user.id,
+        language
+    )
+
+    if not success:
+
+        await query.edit_message_text(
+            "❌ Database error. Please try again."
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # Show main menu
+    # -----------------------------------------------------
+
+    await query.edit_message_text(
+        get_main_menu_text(language),
+        reply_markup=main_menu_keyboard()
+    )
+
+
+# =========================================================
+# FEATURE CALLBACK - TEMPORARY
+# =========================================================
+
+async def feature_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    query = update.callback_query
+
+    if not query:
+        return
+
+    await query.answer()
+
+    language = get_user_language(
+        query.from_user.id
+    )
+
+    if language == "fa":
+
+        text = (
+            "⏳ این قابلیت در مرحله بعد "
+            "فعال خواهد شد."
+        )
+
+    elif language == "ar":
+
+        text = (
+            "⏳ هذه الميزة سيتم تفعيلها "
+            "في المرحلة التالية."
+        )
+
+    else:
+
+        text = (
+            "⏳ This feature will be activated "
+            "in the next step."
+        )
+
+    await query.answer()
+
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🏠 Main Menu",
+                        callback_data="back_main"
+                    )
+                ]
+            ]
+        )
+    )
+
+
+# =========================================================
+# BACK TO MAIN MENU
+# =========================================================
+
+async def back_main_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    query = update.callback_query
+
+    if not query:
+        return
+
+    await query.answer()
+
+    language = get_user_language(
+        query.from_user.id
+    )
+
+    await query.edit_message_text(
+        get_main_menu_text(language),
+        reply_markup=main_menu_keyboard()
     )
 
 
@@ -303,7 +693,7 @@ async def error_handler(
 def main():
 
     # -----------------------------------------------------
-    # Check environment variables
+    # Environment checks
     # -----------------------------------------------------
 
     if not BOT_TOKEN:
@@ -319,13 +709,13 @@ def main():
         )
 
     # -----------------------------------------------------
-    # Test / initialize database
+    # Initialize database
     # -----------------------------------------------------
 
     initialize_database()
 
     # -----------------------------------------------------
-    # Start HTTP server for Render
+    # Start Render health server
     # -----------------------------------------------------
 
     health_thread = threading.Thread(
@@ -336,7 +726,7 @@ def main():
     health_thread.start()
 
     # -----------------------------------------------------
-    # Telegram Application
+    # Telegram application
     # -----------------------------------------------------
 
     application = (
@@ -356,12 +746,33 @@ def main():
         )
     )
 
+    application.add_handler(
+        CallbackQueryHandler(
+            language_callback,
+            pattern=r"^lang_(fa|en|ar)$"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            feature_callback,
+            pattern=r"^feature_"
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            back_main_callback,
+            pattern=r"^back_main$"
+        )
+    )
+
     application.add_error_handler(
         error_handler
     )
 
     # -----------------------------------------------------
-    # Start Bot
+    # Start
     # -----------------------------------------------------
 
     logger.info(
